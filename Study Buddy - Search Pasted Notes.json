@@ -1,0 +1,146 @@
+{
+  "name": "Study Buddy - Search Pasted Notes",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "query"
+            },
+            {
+              "name": "subject"
+            },
+            {
+              "name": "unit"
+            },
+            {
+              "name": "top_k",
+              "type": "number"
+            }
+          ]
+        }
+      },
+      "id": "2e338bfd-1dfe-4a5a-bded-7b00a84de7dd",
+      "name": "Search Request",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: \"models/gemini-embedding-001\", content: { parts: [{ text: String($json.query || \"\") }] }, taskType: \"RETRIEVAL_QUERY\", outputDimensionality: 768 }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "3a67749a-ec33-411c-be22-f1ac28fa05d8",
+      "name": "Embed Question",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        224,
+        0
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "f1btQKEFQuXxF4Ps",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "beWxaNb1ezt7norP",
+          "cachedResultName": "study_buddy_pasted_notes"
+        },
+        "returnAll": true
+      },
+      "id": "1291042a-5ae3-4c2c-9c78-2917e286f7e8",
+      "name": "Load Saved Notes",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        448,
+        0
+      ],
+      "executeOnce": true,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const req = $('Search Request').first().json;\nconst qEmb = $('Embed Question').first().json.embedding;\nconst qVec = qEmb && Array.isArray(qEmb.values) ? qEmb.values : null;\nif (!qVec) throw new Error('Could not embed the search question.');\n\nconst subjectFilter = String(req.subject || '').trim().toLowerCase();\nconst unitFilter = String(req.unit || '').trim().toLowerCase();\nlet topK = Number(req.top_k);\nif (!Number.isFinite(topK) || topK < 1) topK = 5;\ntopK = Math.min(topK, 10);\n\nconst rows = $input.all().map(i => i.json).filter(r => r && r.chunk_text && r.embedding);\nif (rows.length === 0) {\n  return [{ json: { count: 0, results: [], message: 'No pasted notes have been saved yet.' } }];\n}\n\nconst cosine = (a, b) => {\n  let dot = 0, na = 0, nb = 0;\n  const n = Math.min(a.length, b.length);\n  for (let i = 0; i < n; i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }\n  return na && nb ? dot / (Math.sqrt(na) * Math.sqrt(nb)) : 0;\n};\n\nconst scored = [];\nfor (const r of rows) {\n  if (subjectFilter && !String(r.subject || '').toLowerCase().includes(subjectFilter)) continue;\n  if (unitFilter && String(r.unit || '').toLowerCase().replace(/^unit\\s*/, '') !== unitFilter.replace(/^unit\\s*/, '')) continue;\n  let vec;\n  try { vec = JSON.parse(r.embedding); } catch (e) { continue; }\n  scored.push({\n    score: Math.round(cosine(qVec, vec) * 1000) / 1000,\n    source_type: 'pasted_text',\n    source_label: 'Pasted notes - ' + r.subject + ', Unit ' + r.unit + ', Topic: ' + r.topic,\n    subject: r.subject,\n    unit: r.unit,\n    topic: r.topic,\n    note_id: r.note_id,\n    chunk: (Number(r.chunk_index) + 1) + ' of ' + r.chunk_count,\n    saved_at: r.saved_at,\n    text: r.chunk_text,\n  });\n}\n\nscored.sort((a, b) => b.score - a.score);\nconst results = scored.filter(s => s.score >= 0.45).slice(0, topK);\nconst subjects = Array.from(new Set(rows.map(r => r.subject + ' / Unit ' + r.unit + ' / ' + r.topic)));\n\nreturn [{\n  json: {\n    count: results.length,\n    results,\n    saved_topics: subjects.slice(0, 50),\n    message: results.length\n      ? 'Found ' + results.length + ' relevant pasted-note chunk(s).'\n      : 'No relevant pasted notes matched this question.',\n  },\n}];"
+      },
+      "id": "2430a0d6-948c-4220-905a-e0b8b2a5ab76",
+      "name": "Rank Matches",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        0
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Search Request": {
+      "main": [
+        [
+          {
+            "node": "Embed Question",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embed Question": {
+      "main": [
+        [
+          {
+            "node": "Load Saved Notes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Saved Notes": {
+      "main": [
+        [
+          {
+            "node": "Rank Matches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "versionId": "a386efa9-8c5e-479e-8d95-3c2ef40cb839",
+  "meta": {
+    "instanceId": "f810365dfdec30d95bba821e67de65664335b09ae04b7d006bf58942a85ee2af"
+  },
+  "nodeGroups": [],
+  "id": "nNk7KY8pbgYqzcS6",
+  "tags": []
+}
